@@ -42,7 +42,7 @@ type MovementProbe = {
 type ProductMap = Record<string, ProductInfo>
 type FollowingMap = Record<number, boolean>
 
-const GROUP_CODE = "catch_0001"
+const GROUP_CODE = "catchme_penghu"
 const VOIDABLE_SOURCES = ["app_inbound", "APP_INBOUND", "line_outbound", "LINE_OUTBOUND"]
 
 export default function LineBotPage({ onBack }: Props) {

@@ -41,7 +41,7 @@ type Warehouse = {
   warehouse_name: string
 }
 
-const GROUP_CODE = "catch_0001"
+const GROUP_CODE = "catchme_penghu"
 const ALLOWED_WAREHOUSES = ["main", "withdraw", "swap"]
 
 export default function AdjustmentPage({ onBack }: Props) {
