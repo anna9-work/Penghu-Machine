@@ -1,4 +1,3 @@
-//AdjustmentPage.tsx
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { supabase } from "../lib/supabase"
 

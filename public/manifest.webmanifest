@@ -1,0 +1,16 @@
+{
+  "name": "CatchMe Machine",
+  "short_name": "Machine",
+  "start_url": "/CatchMe-Machine/",
+  "scope": "/CatchMe-Machine/",
+  "display": "standalone",
+  "background_color": "#050913",
+  "theme_color": "#050913",
+  "icons": [
+    {
+      "src": "/CatchMe-Machine/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
