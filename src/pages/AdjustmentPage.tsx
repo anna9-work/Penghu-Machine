@@ -190,7 +190,11 @@ export default function AdjustmentPage({ onBack }: Props) {
   }
 
   async function searchStockProductOptions(searchValue = searchKeyword) {
-    const value = searchValue.trim().toLowerCase()
+    const value = searchValue.trim()
+    if (!value) {
+      setError("請輸入 SKU、關鍵字或條碼")
+      return
+    }
 
     try {
       setLoadingProduct(true)
@@ -198,32 +202,26 @@ export default function AdjustmentPage({ onBack }: Props) {
       setMessage("")
       setSearchResults([])
 
-      let barcodeSku = ""
-      if (value) {
-        try {
-          barcodeSku = await loadSkuByBarcode(value)
-        } catch (err) {
-          console.warn("barcode lookup skipped", err)
-        }
-      }
-
       const stockRows = await loadStockRows()
+      const lowerValue = value.toLowerCase()
+
+      console.log("box2piece stockRows", stockRows)
+      console.log("box2piece warehouse", warehouse)
+      console.log("box2piece keyword", lowerValue)
 
       const results = stockRows
         .filter((row) => {
           if (row.warehouse_code !== warehouse) return false
           if (Number(row.box ?? 0) <= 0) return false
-          if (!value) return true
-          if (barcodeSku && row.product_sku === barcodeSku) return true
 
           const sku = row.product_sku.toLowerCase()
           const name = (row.product_name ?? "").toLowerCase()
-          return sku.includes(value) || name.includes(value)
+
+          return sku.includes(lowerValue) || name.includes(lowerValue)
         })
         .slice(0, 10)
         .map(stockRowToProduct)
 
-      console.log("box2piece stockRows", stockRows)
       console.log("box2piece results", results)
 
       setSearchResults(results)
@@ -592,11 +590,6 @@ export default function AdjustmentPage({ onBack }: Props) {
             setSearchKeyword("")
             setSearchResults([])
             setError("")
-            if (mode === "box2piece") {
-              window.setTimeout(() => {
-                void searchStockProductOptions("")
-              }, 0)
-            }
           }}
           style={addProductButtonStyle}
         >
