@@ -1,6 +1,6 @@
 {
-  "name": "CatchMe Machine",
-  "short_name": "Machine",
+  "name": "Penghu-Machine",
+  "short_name": "Penghu-Machine",
   "start_url": "/CatchMe-Machine/",
   "scope": "/CatchMe-Machine/",
   "display": "standalone",
