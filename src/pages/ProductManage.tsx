@@ -44,8 +44,17 @@ type BarcodeRow = {
   barcode: string
 }
 
-type Filter = "all" | "enabled" | "disabled"
-type Mode = "list" | "detail"
+type ImportDraftRow = {
+  rowNumber: number
+  sku: string
+  name: string
+  unitsPerBox: number
+  barcode: string
+  enabled: boolean
+  errors: string[]
+}
+
+type Mode = "list" | "detail" | "import"
 
 const TAG_OPTIONS = ["代夾物", "食品", "百貨", "娃娃"]
 const PRODUCT_RESULT_LIMIT = 50
@@ -76,7 +85,6 @@ export default function ProductManage({ onBack }: Props) {
   const [mode, setMode] = useState<Mode>("list")
   const [products, setProducts] = useState<Product[]>([])
   const [query, setQuery] = useState("")
-  const [filter, setFilter] = useState<Filter>("all")
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -86,27 +94,18 @@ export default function ProductManage({ onBack }: Props) {
     let cancelled = false
 
     const timer = window.setTimeout(() => {
-      loadProducts(query, filter, () => cancelled)
+      loadProducts(query, () => cancelled)
     }, 250)
 
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [filter, query])
+  }, [query])
 
   const filteredProducts = useMemo(() => {
     return products.slice(0, PRODUCT_RESULT_LIMIT)
   }, [products])
-
-  function applyEnabledFilter(
-    request: any,
-    activeFilter: Filter
-  ) {
-    if (activeFilter === "enabled") return request.eq("enabled", true)
-    if (activeFilter === "disabled") return request.eq("enabled", false)
-    return request
-  }
 
   function mergeProductRows(rowGroups: ProductRow[][]) {
     const map = new Map<string, ProductRow>()
@@ -123,17 +122,14 @@ export default function ProductManage({ onBack }: Props) {
 
   async function searchProductsByColumn(
     column: "product_sku" | "product_name",
-    keyword: string,
-    activeFilter: Filter
+    keyword: string
   ) {
-    let request = supabase
+    const request = supabase
       .from("products")
       .select("product_sku,product_name,units_per_box,enabled,category,tags")
       .ilike(column, `%${keyword}%`)
       .order("product_sku", { ascending: true })
       .limit(PRODUCT_RESULT_LIMIT)
-
-    request = applyEnabledFilter(request, activeFilter)
 
     const { data, error } = await request
     if (error) throw error
@@ -141,7 +137,7 @@ export default function ProductManage({ onBack }: Props) {
     return (data ?? []) as ProductRow[]
   }
 
-  async function searchProductsByBarcode(keyword: string, activeFilter: Filter) {
+  async function searchProductsByBarcode(keyword: string) {
     const { data: barcodeRows, error: barcodeError } = await supabase
       .from("product_barcodes")
       .select("product_sku")
@@ -157,13 +153,11 @@ export default function ProductManage({ onBack }: Props) {
 
     if (skuList.length === 0) return []
 
-    let request = supabase
+    const request = supabase
       .from("products")
       .select("product_sku,product_name,units_per_box,enabled,category,tags")
       .in("product_sku", skuList)
       .order("product_sku", { ascending: true })
-
-    request = applyEnabledFilter(request, activeFilter)
 
     const { data, error } = await request
     if (error) throw error
@@ -173,7 +167,6 @@ export default function ProductManage({ onBack }: Props) {
 
   async function loadProducts(
     searchText = query,
-    activeFilter = filter,
     shouldCancel = () => false
   ) {
     try {
@@ -185,20 +178,18 @@ export default function ProductManage({ onBack }: Props) {
 
       if (keyword) {
         const [skuRows, nameRows, barcodeRows] = await Promise.all([
-          searchProductsByColumn("product_sku", keyword, activeFilter),
-          searchProductsByColumn("product_name", keyword, activeFilter),
-          searchProductsByBarcode(keyword, activeFilter),
+          searchProductsByColumn("product_sku", keyword),
+          searchProductsByColumn("product_name", keyword),
+          searchProductsByBarcode(keyword),
         ])
 
         rows = mergeProductRows([skuRows, nameRows, barcodeRows])
       } else {
-        let request = supabase
+        const request = supabase
           .from("products")
           .select("product_sku,product_name,units_per_box,enabled,category,tags")
           .order("product_sku", { ascending: true })
           .limit(PRODUCT_RESULT_LIMIT)
-
-        request = applyEnabledFilter(request, activeFilter)
 
         const { data: productData, error: productError } = await request
         if (productError) throw productError
@@ -274,6 +265,22 @@ export default function ProductManage({ onBack }: Props) {
 
   function closeDetail() {
     setSelectedProduct(null)
+    setMode("list")
+  }
+
+  function openImportPage() {
+    setMode("import")
+    setMessage("")
+    setError("")
+  }
+
+  function closeImportPage() {
+    setMode("list")
+  }
+
+  async function handleImportDone(importMessage: string) {
+    await loadProducts()
+    setMessage(importMessage)
     setMode("list")
   }
 
@@ -424,18 +431,12 @@ export default function ProductManage({ onBack }: Props) {
                 ...(isDesktop ? desktopGhostButtonStyle : {}),
               }}
             >
-              &lt;
+              ←
             </button>
 
-            {isDesktop && (
-              <div style={desktopHeadingStyle}>
-                <div style={desktopEyebrowStyle}>PRODUCT DATABASE</div>
-                <h1 style={desktopTitleStyle}>商品管理</h1>
-                <p style={desktopDescriptionStyle}>
-                  管理商品啟用狀態、箱入數、條碼與分類標籤。
-                </p>
-              </div>
-            )}
+            <h1 style={{ ...pageTitleStyle, ...(isDesktop ? desktopPageTitleStyle : {}) }}>
+              商品管理
+            </h1>
 
             <button
               aria-label="新增商品"
@@ -445,11 +446,18 @@ export default function ProductManage({ onBack }: Props) {
                 ...(isDesktop ? desktopAddButtonStyle : {}),
               }}
             >
-              {isDesktop ? "新增商品" : "+"}
+              +
             </button>
           </header>
 
           <div style={{ ...(isDesktop ? desktopToolbarStyle : {}) }}>
+            <button
+              onClick={openImportPage}
+              style={{ ...importButtonStyle, ...(isDesktop ? desktopImportButtonStyle : {}) }}
+            >
+              匯入商品
+            </button>
+
             <label
               style={{
                 ...searchWrapStyle,
@@ -460,36 +468,30 @@ export default function ProductManage({ onBack }: Props) {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜尋 sku / 品名 / 條碼（直接查詢資料庫）"
+                placeholder="搜尋商品"
                 style={{
                   ...searchInputStyle,
                   ...(isDesktop ? desktopSearchInputStyle : {}),
                 }}
               />
             </label>
-
-            <div
-              style={{
-                ...filterRowStyle,
-                ...(isDesktop ? desktopFilterRowStyle : {}),
-              }}
-            >
-              <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
-                全部
-              </FilterChip>
-              <FilterChip active={filter === "enabled"} onClick={() => setFilter("enabled")}>
-                啟用
-              </FilterChip>
-              <FilterChip active={filter === "disabled"} onClick={() => setFilter("disabled")}>
-                停用
-              </FilterChip>
-            </div>
           </div>
 
           {loading && <div style={emptyStyle}>商品資料載入中...</div>}
 
           {!loading && (
             <section style={{ ...listStyle, ...(isDesktop ? desktopListStyle : {}) }}>
+              {isDesktop && filteredProducts.length > 0 && (
+                <div style={desktopListHeaderStyle}>
+                  <span>狀態</span>
+                  <span>SKU</span>
+                  <span>品名</span>
+                  <span>箱入數</span>
+                  <span>條碼</span>
+                  <span />
+                </div>
+              )}
+
               {filteredProducts.map((product) => (
                 <button
                   key={product.product_sku}
@@ -499,32 +501,78 @@ export default function ProductManage({ onBack }: Props) {
                     ...(isDesktop ? desktopProductCardStyle : {}),
                   }}
                 >
-                  <span
-                    style={{
-                      ...statusDotStyle,
-                      background: product.enabled ? "#16c765" : "#64748b",
-                      boxShadow: product.enabled
-                        ? "0 0 0 7px rgba(22,199,101,0.12)"
-                        : "0 0 0 7px rgba(100,116,139,0.12)",
-                    }}
+                    <span
+                      style={{
+                        ...statusDotStyle,
+                        ...(isDesktop ? desktopStatusDotStyle : {}),
+                        background: product.enabled ? "#16c765" : "#64748b",
+                        boxShadow: product.enabled
+                          ? "0 0 0 7px rgba(22,199,101,0.12)"
+                          : "0 0 0 7px rgba(100,116,139,0.12)",
+                      }}
                   />
-                  <div style={skuStyle}>{product.product_sku}</div>
-                  <div style={nameStyle}>{product.product_name || "未命名商品"}</div>
+                  <div style={{ ...skuStyle, ...(isDesktop ? desktopSkuStyle : {}) }}>
+                    {product.product_sku}
+                  </div>
+                  <div style={{ ...nameStyle, ...(isDesktop ? desktopNameStyle : {}) }}>
+                    {product.product_name || "未命名商品"}
+                  </div>
 
-                  <div style={metricGridStyle}>
-                    <div style={metricBoxStyle}>
-                      <div style={metricLabelStyle}>箱入數</div>
-                      <div style={metricValueStyle}>
+                  <div
+                    style={{
+                      ...metricGridStyle,
+                      ...(isDesktop ? desktopMetricGridStyle : {}),
+                    }}
+                  >
+                    <div
+                      style={{
+                        ...metricBoxStyle,
+                        ...(isDesktop ? desktopMetricBoxStyle : {}),
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...metricLabelStyle,
+                          ...(isDesktop ? desktopMetricLabelStyle : {}),
+                        }}
+                      >
+                        箱入數
+                      </div>
+                      <div
+                        style={{
+                          ...metricValueStyle,
+                          ...(isDesktop ? desktopMetricValueStyle : {}),
+                        }}
+                      >
                         {product.units_per_box || "-"}
                       </div>
                     </div>
-                    <div style={metricBoxStyle}>
-                      <div style={metricLabelStyle}>條碼</div>
-                      <div style={barcodeValueStyle}>
+                    <div
+                      style={{
+                        ...metricBoxStyle,
+                        ...(isDesktop ? desktopMetricBoxStyle : {}),
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...metricLabelStyle,
+                          ...(isDesktop ? desktopMetricLabelStyle : {}),
+                        }}
+                      >
+                        條碼
+                      </div>
+                      <div
+                        style={{
+                          ...barcodeValueStyle,
+                          ...(isDesktop ? desktopBarcodeValueStyle : {}),
+                        }}
+                      >
                         {product.barcodes[0]?.barcode ?? "-"}
                       </div>
                     </div>
                   </div>
+
+                  {isDesktop && <div style={desktopRowArrowStyle}>›</div>}
                 </button>
               ))}
 
@@ -548,31 +596,205 @@ export default function ProductManage({ onBack }: Props) {
           onSubmit={saveProduct}
         />
       )}
+
+      {mode === "import" && (
+        <ProductImport
+          isDesktop={isDesktop}
+          onCancel={closeImportPage}
+          onImported={handleImportDone}
+        />
+      )}
     </main>
   )
 }
 
-function FilterChip({
-  active,
-  children,
-  onClick,
+function ProductImport({
+  isDesktop,
+  onCancel,
+  onImported,
 }: {
-  active: boolean
-  children: string
-  onClick: () => void
+  isDesktop: boolean
+  onCancel: () => void
+  onImported: (message: string) => Promise<void>
 }) {
+  const [rawText, setRawText] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [importError, setImportError] = useState("")
+
+  const rows = useMemo(() => parseImportRows(rawText), [rawText])
+  const validRows = rows.filter((row) => row.errors.length === 0)
+  const invalidRows = rows.filter((row) => row.errors.length > 0)
+  const canImport = validRows.length > 0 && !busy
+
+  async function handleImport() {
+    try {
+      setBusy(true)
+      setImportError("")
+
+      if (rows.length === 0) throw new Error("請先貼上要匯入的商品")
+
+      const now = new Date().toISOString()
+      const productRows = validRows.map((row) => ({
+        product_sku: row.sku,
+        product_name: row.name,
+        units_per_box: row.unitsPerBox,
+        enabled: true,
+        tags: [],
+        category: null,
+        updated_at: now,
+      }))
+
+      const { error: productError } = await supabase
+        .from("products")
+        .upsert(productRows, { onConflict: "product_sku" })
+
+      if (productError) throw productError
+
+      const barcodeCandidates = validRows
+        .filter((row) => row.barcode)
+        .map((row) => ({
+          product_sku: row.sku,
+          barcode: row.barcode,
+          enabled: true,
+        }))
+
+      let insertedBarcodeCount = 0
+
+      if (barcodeCandidates.length > 0) {
+        const uniqueBarcodes = Array.from(
+          new Set(barcodeCandidates.map((row) => row.barcode))
+        )
+
+        const { data: existingBarcodeRows, error: existingBarcodeError } =
+          await supabase
+            .from("product_barcodes")
+            .select("barcode")
+            .in("barcode", uniqueBarcodes)
+
+        if (existingBarcodeError) throw existingBarcodeError
+
+        const existingBarcodes = new Set(
+          (existingBarcodeRows ?? []).map((row) => String(row.barcode))
+        )
+        const seenBarcodes = new Set<string>()
+        const barcodeRows = barcodeCandidates.filter((row) => {
+          if (existingBarcodes.has(row.barcode)) return false
+          if (seenBarcodes.has(row.barcode)) return false
+          seenBarcodes.add(row.barcode)
+          return true
+        })
+
+        if (barcodeRows.length > 0) {
+          const { error: barcodeError } = await supabase
+            .from("product_barcodes")
+            .insert(barcodeRows)
+
+          if (barcodeError) throw barcodeError
+          insertedBarcodeCount = barcodeRows.length
+        }
+      }
+
+      const skippedText =
+        invalidRows.length > 0 ? `，略過 ${invalidRows.length} 筆錯誤列` : ""
+
+      await onImported(
+        `已匯入 ${validRows.length} 筆商品，新增 ${insertedBarcodeCount} 筆條碼${skippedText}`
+      )
+    } catch (err) {
+      console.error(err)
+      setImportError(err instanceof Error ? err.message : "商品匯入失敗")
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <button
-      onClick={onClick}
-      style={{
-        ...filterChipStyle,
-        background: active ? "#5aa2ff" : "rgba(255,255,255,0.06)",
-        borderColor: active ? "#5aa2ff" : "rgba(255,255,255,0.13)",
-        color: active ? "#ffffff" : "#f4f7fb",
-      }}
-    >
-      {children}
-    </button>
+    <section style={{ ...detailShellStyle, ...(isDesktop ? desktopDetailShellStyle : {}) }}>
+      <div style={{ ...detailPanelStyle, ...(isDesktop ? desktopDetailPanelStyle : {}) }}>
+        <div style={{ ...detailHeaderStyle, ...(isDesktop ? desktopDetailHeaderStyle : {}) }}>
+          <h1 style={detailTitleStyle}>匯入商品</h1>
+          <button
+            aria-label="關閉"
+            onClick={onCancel}
+            style={{ ...closeButtonStyle, ...(isDesktop ? desktopCloseButtonStyle : {}) }}
+          >
+            ×
+          </button>
+        </div>
+
+        {importError && <div style={errorStyle}>{importError}</div>}
+
+        <div style={importHintStyle}>
+          可從試算表直接複製貼上。欄位順序：sku、品名、箱入數、條碼。條碼可空白，匯入商品一律預設啟用。
+        </div>
+
+        <textarea
+          value={rawText}
+          onChange={(event) => setRawText(event.target.value)}
+          placeholder={"sku,品名,箱入數,條碼\nef023,大品客-16入,16,8886467127137\ntest001,商品,10,"}
+          style={{
+            ...importTextareaStyle,
+            ...(isDesktop ? desktopImportTextareaStyle : {}),
+          }}
+        />
+
+        <div style={importSummaryStyle}>
+          <span>共 {rows.length} 筆</span>
+          <span>可匯入 {validRows.length} 筆</span>
+          <span style={{ color: invalidRows.length ? "#ff9999" : "#86efac" }}>
+            會略過 {invalidRows.length} 筆
+          </span>
+        </div>
+
+        {rows.length > 0 && (
+          <div style={importPreviewStyle}>
+            <div style={importPreviewHeaderStyle}>
+              <span>列</span>
+              <span>SKU</span>
+              <span>品名</span>
+              <span>箱入數</span>
+              <span>條碼</span>
+              <span>狀態</span>
+            </div>
+
+            {rows.slice(0, 80).map((row) => (
+              <div
+                key={`${row.rowNumber}-${row.sku}-${row.barcode}`}
+                style={{
+                  ...importPreviewRowStyle,
+                  borderColor: row.errors.length ? "#7f1d1d" : "#333",
+                }}
+              >
+                <span>{row.rowNumber}</span>
+                <span>{row.sku || "-"}</span>
+                <span>{row.name || "-"}</span>
+                <span>{row.unitsPerBox || "-"}</span>
+                <span>{row.barcode || "-"}</span>
+                <span style={{ color: row.errors.length ? "#ff9999" : "#86efac" }}>
+                  {row.errors.length ? `略過：${row.errors.join("、")}` : "可匯入"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={actionRowStyle}>
+          <button onClick={onCancel} style={secondaryButtonStyle}>
+            取消
+          </button>
+          <button
+            disabled={!canImport}
+            onClick={handleImport}
+            style={{
+              ...primaryButtonStyle,
+              opacity: canImport ? 1 : 0.45,
+            }}
+          >
+            {busy ? "匯入中..." : "確認匯入"}
+          </button>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -871,6 +1093,116 @@ function ProductDetail({
   )
 }
 
+function parseImportRows(rawText: string): ImportDraftRow[] {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) return []
+
+  const delimiter = detectDelimiter(lines[0])
+  const firstCells = splitDelimitedLine(lines[0], delimiter).map(normalizeHeader)
+  const hasHeader = firstCells.some((cell) =>
+    ["sku", "product_sku", "品名", "商品名稱", "箱入數", "條碼"].includes(cell)
+  )
+
+  const dataLines = hasHeader ? lines.slice(1) : lines
+  const skuCounts = new Map<string, number>()
+  const barcodeCounts = new Map<string, number>()
+
+  const parsedRows = dataLines.map((line, index) => {
+    const cells = splitDelimitedLine(line, delimiter)
+    const sku = String(cells[0] ?? "").trim().toLowerCase()
+    const name = String(cells[1] ?? "").trim()
+    const unitsPerBox = Number(String(cells[2] ?? "").trim())
+    const barcode = String(cells[3] ?? "").trim()
+
+    if (sku) skuCounts.set(sku, (skuCounts.get(sku) ?? 0) + 1)
+    if (barcode) {
+      barcodeCounts.set(barcode, (barcodeCounts.get(barcode) ?? 0) + 1)
+    }
+
+    return {
+      rowNumber: index + 1 + (hasHeader ? 1 : 0),
+      sku,
+      name,
+      unitsPerBox,
+      barcode,
+      enabled: true,
+      errors: [],
+    }
+  })
+
+  return parsedRows.map((row) => {
+    const errors: string[] = []
+
+    if (!row.sku) errors.push("缺 SKU")
+    if (row.sku && !/^[a-z0-9._-]+$/.test(row.sku)) {
+      errors.push("SKU 格式錯")
+    }
+    if (row.sku && (skuCounts.get(row.sku) ?? 0) > 1) {
+      errors.push("同批 SKU 重複")
+    }
+    if (!row.name) errors.push("缺品名")
+    if (!Number.isInteger(row.unitsPerBox) || row.unitsPerBox <= 0) {
+      errors.push("箱入數錯")
+    }
+    if (row.barcode && (barcodeCounts.get(row.barcode) ?? 0) > 1) {
+      errors.push("同批條碼重複")
+    }
+
+    return {
+      ...row,
+      errors,
+    }
+  })
+}
+
+function detectDelimiter(line: string) {
+  if (line.includes("\t")) return "\t"
+  return ","
+}
+
+function splitDelimitedLine(line: string, delimiter: string) {
+  if (delimiter === "\t") return line.split("\t")
+
+  const cells: string[] = []
+  let current = ""
+  let quoted = false
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    const nextChar = line[index + 1]
+
+    if (char === '"' && quoted && nextChar === '"') {
+      current += '"'
+      index += 1
+      continue
+    }
+
+    if (char === '"') {
+      quoted = !quoted
+      continue
+    }
+
+    if (char === delimiter && !quoted) {
+      cells.push(current.trim())
+      current = ""
+      continue
+    }
+
+    current += char
+  }
+
+  cells.push(current.trim())
+  return cells
+}
+
+function normalizeHeader(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "_")
+}
+
 const pageStyle: CSSProperties = {
   minHeight: "100dvh",
   background: "#0f0f0f",
@@ -885,87 +1217,102 @@ const desktopPageStyle: CSSProperties = {
 }
 
 const topBarStyle: CSSProperties = {
-  display: "flex",
+  display: "grid",
+  gridTemplateColumns: "52px minmax(0, 1fr) 52px",
   alignItems: "center",
-  justifyContent: "space-between",
   maxWidth: 520,
-  margin: "0 auto 20px",
+  margin: "0 auto 16px",
 }
 
 const desktopTopBarStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "72px minmax(0, 1fr) 120px",
-  gap: 16,
+  gridTemplateColumns: "52px minmax(0, 1fr) 52px",
+  gap: 12,
   maxWidth: 1120,
-  margin: "0 auto 20px",
+  margin: "0 auto 18px",
 }
 
-const desktopHeadingStyle: CSSProperties = {
-  minWidth: 0,
-}
-
-const desktopEyebrowStyle: CSSProperties = {
-  color: "#999",
-  fontSize: 12,
-}
-
-const desktopTitleStyle: CSSProperties = {
-  margin: "4px 0 0",
+const pageTitleStyle: CSSProperties = {
+  margin: 0,
   color: "#fff",
-  fontSize: 22,
-  fontWeight: 700,
-  lineHeight: 1.2,
+  fontSize: 26,
+  lineHeight: 1.1,
+  fontWeight: 900,
+  letterSpacing: 0,
+  textAlign: "center",
 }
 
-const desktopDescriptionStyle: CSSProperties = {
-  margin: "6px 0 0",
-  color: "#999",
-  fontSize: 14,
+const desktopPageTitleStyle: CSSProperties = {
+  fontSize: 28,
 }
 
 const ghostButtonStyle: CSSProperties = {
   background: "transparent",
   color: "#fff",
   border: "none",
-  fontSize: 18,
+  fontSize: 46,
+  lineHeight: 1,
   padding: 0,
+  textAlign: "left",
 }
 
 const desktopGhostButtonStyle: CSSProperties = {
-  height: 40,
-  border: "1px solid #333",
-  borderRadius: 12,
-  background: "#1a1a1a",
+  width: 46,
+  height: 46,
+  border: "none",
+  borderRadius: 0,
+  background: "transparent",
 }
 
 const addButtonStyle: CSSProperties = {
   background: "transparent",
   color: "#5aa2ff",
   border: "none",
-  fontSize: 28,
+  fontSize: 34,
+  lineHeight: 1,
   fontWeight: 700,
   padding: 0,
+  textAlign: "right",
 }
 
 const desktopAddButtonStyle: CSSProperties = {
-  width: "100%",
-  height: 40,
-  borderRadius: 12,
+  width: 52,
+  height: 46,
+  borderRadius: 0,
   border: "none",
-  background: "#fff",
-  color: "#111",
-  fontSize: 15,
+  background: "transparent",
+  color: "#5aa2ff",
+  fontSize: 34,
   fontWeight: 700,
 }
 
 const desktopToolbarStyle: CSSProperties = {
   width: "100%",
   maxWidth: 1120,
-  margin: "0 auto 18px",
+  margin: "0 auto 12px",
   display: "grid",
-  gridTemplateColumns: "minmax(280px, 1fr) auto",
+  gridTemplateColumns: "150px minmax(280px, 1fr)",
   gap: 12,
   alignItems: "center",
+}
+
+const importButtonStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: 520,
+  height: 46,
+  margin: "0 auto 12px",
+  border: "1px solid #444",
+  borderRadius: 12,
+  background: "#1a1a1a",
+  color: "#fff",
+  fontSize: 16,
+  fontWeight: 800,
+}
+
+const desktopImportButtonStyle: CSSProperties = {
+  maxWidth: "none",
+  margin: 0,
+  fontSize: 15,
 }
 
 const searchWrapStyle: CSSProperties = {
@@ -1007,31 +1354,6 @@ const desktopSearchInputStyle: CSSProperties = {
   fontSize: 15,
 }
 
-const filterRowStyle: CSSProperties = {
-  width: "100%",
-  maxWidth: 520,
-  margin: "0 auto 20px",
-  display: "flex",
-  gap: 10,
-}
-
-const desktopFilterRowStyle: CSSProperties = {
-  width: "auto",
-  maxWidth: "none",
-  margin: 0,
-  justifyContent: "flex-end",
-}
-
-const filterChipStyle: CSSProperties = {
-  minWidth: 64,
-  height: 38,
-  padding: "0 14px",
-  borderRadius: 12,
-  border: "1px solid",
-  fontSize: 15,
-  fontWeight: 700,
-}
-
 const listStyle: CSSProperties = {
   width: "100%",
   maxWidth: 520,
@@ -1042,7 +1364,25 @@ const listStyle: CSSProperties = {
 
 const desktopListStyle: CSSProperties = {
   maxWidth: 1120,
-  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+  gap: 0,
+  border: "1px solid #333",
+  borderRadius: 16,
+  overflow: "hidden",
+  background: "#151515",
+}
+
+const desktopListHeaderStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "58px 160px minmax(0, 1fr) 100px 220px 34px",
+  alignItems: "center",
+  gap: 12,
+  minHeight: 42,
+  padding: "0 16px",
+  borderBottom: "1px solid #303030",
+  background: "#111",
+  color: "#999",
+  fontSize: 12,
+  fontWeight: 800,
 }
 
 const productCardStyle: CSSProperties = {
@@ -1057,7 +1397,18 @@ const productCardStyle: CSSProperties = {
 }
 
 const desktopProductCardStyle: CSSProperties = {
-  minHeight: 150,
+  minHeight: 58,
+  display: "grid",
+  gridTemplateColumns: "58px 160px minmax(0, 1fr) 100px 220px 34px",
+  alignItems: "center",
+  gap: 12,
+  border: "none",
+  borderBottom: "1px solid #2b2b2b",
+  borderRadius: 0,
+  background: "#1a1a1a",
+  padding: "10px 16px",
+  boxShadow: "none",
+  cursor: "pointer",
 }
 
 const statusDotStyle: CSSProperties = {
@@ -1067,6 +1418,11 @@ const statusDotStyle: CSSProperties = {
   width: 12,
   height: 12,
   borderRadius: 999,
+}
+
+const desktopStatusDotStyle: CSSProperties = {
+  position: "static",
+  justifySelf: "center",
 }
 
 const skuStyle: CSSProperties = {
@@ -1079,6 +1435,12 @@ const skuStyle: CSSProperties = {
   letterSpacing: 0,
 }
 
+const desktopSkuStyle: CSSProperties = {
+  maxWidth: "none",
+  fontSize: 14,
+  fontWeight: 800,
+}
+
 const nameStyle: CSSProperties = {
   marginTop: 6,
   color: "#ddd",
@@ -1088,11 +1450,23 @@ const nameStyle: CSSProperties = {
   overflowWrap: "anywhere",
 }
 
+const desktopNameStyle: CSSProperties = {
+  marginTop: 0,
+  color: "#f4f4f5",
+  fontSize: 14,
+  fontWeight: 700,
+}
+
 const metricGridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
   gap: 10,
   marginTop: 14,
+}
+
+const desktopMetricGridStyle: CSSProperties = {
+  display: "contents",
+  marginTop: 0,
 }
 
 const metricBoxStyle: CSSProperties = {
@@ -1104,9 +1478,20 @@ const metricBoxStyle: CSSProperties = {
   boxSizing: "border-box",
 }
 
+const desktopMetricBoxStyle: CSSProperties = {
+  border: "none",
+  borderRadius: 0,
+  background: "transparent",
+  padding: 0,
+}
+
 const metricLabelStyle: CSSProperties = {
   color: "#bbb",
   fontSize: 13,
+}
+
+const desktopMetricLabelStyle: CSSProperties = {
+  display: "none",
 }
 
 const metricValueStyle: CSSProperties = {
@@ -1117,10 +1502,32 @@ const metricValueStyle: CSSProperties = {
   lineHeight: 1.2,
 }
 
+const desktopMetricValueStyle: CSSProperties = {
+  marginTop: 0,
+  color: "#e5e7eb",
+  fontSize: 14,
+  fontWeight: 800,
+}
+
 const barcodeValueStyle: CSSProperties = {
   ...metricValueStyle,
   fontSize: 15,
   overflowWrap: "anywhere",
+}
+
+const desktopBarcodeValueStyle: CSSProperties = {
+  ...desktopMetricValueStyle,
+  color: "#cbd5e1",
+  fontSize: 13,
+  overflowWrap: "anywhere",
+}
+
+const desktopRowArrowStyle: CSSProperties = {
+  color: "#777",
+  fontSize: 26,
+  lineHeight: 1,
+  fontWeight: 800,
+  textAlign: "right",
 }
 
 const detailShellStyle: CSSProperties = {
@@ -1168,11 +1575,18 @@ const detailTitleStyle: CSSProperties = {
 const closeButtonStyle: CSSProperties = {
   width: 46,
   height: 46,
-  borderRadius: 12,
-  border: "1px solid #444",
-  background: "#222",
+  borderRadius: 0,
+  border: "none",
+  background: "transparent",
   color: "#fff",
-  fontSize: 24,
+  fontSize: 34,
+  lineHeight: 1,
+  justifySelf: "end",
+}
+
+const desktopCloseButtonStyle: CSSProperties = {
+  border: "none",
+  background: "transparent",
 }
 
 const fieldStyle: CSSProperties = {
@@ -1291,6 +1705,81 @@ const boundBarcodeStyle: CSSProperties = {
 const boundEmptyStyle: CSSProperties = {
   color: "#999",
   fontSize: 14,
+}
+
+const importHintStyle: CSSProperties = {
+  color: "#bbb",
+  fontSize: 14,
+  lineHeight: 1.5,
+  marginBottom: 12,
+}
+
+const importTextareaStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 180,
+  borderRadius: 12,
+  border: "1px solid #444",
+  outline: "none",
+  background: "#0f0f0f",
+  color: "#fff",
+  padding: 12,
+  boxSizing: "border-box",
+  fontSize: 14,
+  lineHeight: 1.5,
+  resize: "vertical",
+  marginBottom: 12,
+}
+
+const desktopImportTextareaStyle: CSSProperties = {
+  minHeight: 220,
+}
+
+const importSummaryStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  color: "#ddd",
+  fontSize: 14,
+  fontWeight: 700,
+  marginBottom: 12,
+}
+
+const importPreviewStyle: CSSProperties = {
+  display: "grid",
+  gap: 0,
+  border: "1px solid #333",
+  borderRadius: 12,
+  overflowX: "auto",
+  overflowY: "hidden",
+  marginBottom: 16,
+}
+
+const importPreviewHeaderStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "48px 130px minmax(0, 1fr) 76px 160px 150px",
+  gap: 10,
+  alignItems: "center",
+  minWidth: 760,
+  minHeight: 38,
+  padding: "0 12px",
+  background: "#111",
+  color: "#999",
+  fontSize: 12,
+  fontWeight: 800,
+}
+
+const importPreviewRowStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "48px 130px minmax(0, 1fr) 76px 160px 150px",
+  gap: 10,
+  alignItems: "center",
+  minWidth: 760,
+  minHeight: 42,
+  borderTop: "1px solid #333",
+  padding: "8px 12px",
+  color: "#e5e7eb",
+  fontSize: 13,
+  overflowWrap: "anywhere",
 }
 
 const actionRowStyle: CSSProperties = {
