@@ -5,9 +5,6 @@ type Props = {
   onBack: () => void
 }
 
-type TypeFilter = "all" | "inbound" | "outbound" | "voided"
-type WarehouseFilter = "all" | "main" | "withdraw" | "swap" | "onsite"
-
 type LedgerRow = {
   id: number
   group_code: string
@@ -45,11 +42,30 @@ type FollowingMap = Record<number, boolean>
 const GROUP_CODE = "catchme_penghu"
 const VOIDABLE_SOURCES = ["app_inbound", "APP_INBOUND", "line_outbound", "LINE_OUTBOUND"]
 
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === "undefined") return false
+    return window.matchMedia("(min-width: 900px)").matches
+  })
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const query = window.matchMedia("(min-width: 900px)")
+    const update = () => setIsDesktop(query.matches)
+
+    update()
+    query.addEventListener("change", update)
+
+    return () => query.removeEventListener("change", update)
+  }, [])
+
+  return isDesktop
+}
+
 export default function LineBotPage({ onBack }: Props) {
+  const isDesktop = useIsDesktop()
   const [businessDate, setBusinessDate] = useState(() => getBusinessDateText())
-  const [keyword, setKeyword] = useState("")
-  const [warehouse, setWarehouse] = useState<WarehouseFilter>("all")
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all")
   const [rows, setRows] = useState<LedgerRow[]>([])
   const [products, setProducts] = useState<ProductMap>({})
   const [followingMap, setFollowingMap] = useState<FollowingMap>({})
@@ -65,26 +81,8 @@ export default function LineBotPage({ onBack }: Props) {
   const todayBusinessDate = getBusinessDateText()
 
   const filteredRows = useMemo(() => {
-    const value = keyword.trim().toLowerCase()
-
-    return rows.filter((row) => {
-      const productName = products[row.product_sku]?.product_name ?? ""
-      const direction = getDirection(row)
-      const isVoided = Boolean(row.voided_by_id)
-
-      if (typeFilter === "inbound" && direction !== "in") return false
-      if (typeFilter === "outbound" && direction !== "out") return false
-      if (typeFilter === "voided" && !isVoided) return false
-
-      if (!value) return true
-
-      return (
-        String(row.id).includes(value) ||
-        row.product_sku.toLowerCase().includes(value) ||
-        productName.toLowerCase().includes(value)
-      )
-    })
-  }, [keyword, products, rows, typeFilter])
+    return rows
+  }, [rows])
 
   const summary = useMemo(() => {
     return filteredRows.reduce(
@@ -102,14 +100,14 @@ export default function LineBotPage({ onBack }: Props) {
     )
   }, [filteredRows])
 
-  async function loadRecords() {
+  async function loadRecords(nextBusinessDate = businessDate) {
     try {
       setLoading(true)
       setError("")
       setMessage("")
 
-      const { start, end } = getBusinessDateRange(businessDate)
-      let query = supabase
+      const { start, end } = getBusinessDateRange(nextBusinessDate)
+      const { data, error: ledgerError } = await supabase
         .from("inventory_ledger")
         .select(
           "id,group_code,warehouse_code,product_sku,in_box,in_piece,out_box,out_piece,unit_cost_piece,in_amount,out_amount,source,created_at,void_of_id,voided_by_id"
@@ -120,12 +118,6 @@ export default function LineBotPage({ onBack }: Props) {
         .lt("created_at", end)
         .order("created_at", { ascending: false })
         .limit(160)
-
-      if (warehouse !== "all") {
-        query = query.eq("warehouse_code", warehouse)
-      }
-
-      const { data, error: ledgerError } = await query
 
       if (ledgerError) throw ledgerError
 
@@ -142,6 +134,10 @@ export default function LineBotPage({ onBack }: Props) {
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleBusinessDateChange(value: string) {
+    setBusinessDate(value)
   }
 
   async function loadProducts(nextRows: LedgerRow[]) {
@@ -259,7 +255,7 @@ export default function LineBotPage({ onBack }: Props) {
 
   return (
     <div style={pageStyle}>
-      <div style={contentStyle}>
+      <div style={{ ...contentStyle, ...(isDesktop ? desktopContentStyle : {}) }}>
         <header style={topBarStyle}>
           <button onClick={onBack} style={topIconButtonStyle} aria-label="返回">
             ←
@@ -279,60 +275,24 @@ export default function LineBotPage({ onBack }: Props) {
         {error && <div style={errorStyle}>{error}</div>}
 
         <section style={filterPanelStyle}>
-          <div style={fieldStyle}>
-            <label style={labelStyle}>日期</label>
-            <input
-              value={businessDate}
-              onChange={(event) => setBusinessDate(event.target.value)}
-              type="date"
-              style={inputStyle}
-            />
-          </div>
+          <input
+            aria-label="日期"
+            value={businessDate}
+            onChange={(event) => handleBusinessDateChange(event.target.value)}
+            type="date"
+            style={{ ...inputStyle, ...dateInputStyle }}
+          />
 
-          <div style={fieldStyle}>
-            <label style={labelStyle}>關鍵字</label>
-            <input
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-              placeholder="例如 a564 / 垃圾袋 / 3108"
-              style={inputStyle}
-            />
-          </div>
-
-          <div style={compactGridStyle}>
-            <div style={fieldStyle}>
-              <label style={labelStyle}>倉庫</label>
-              <select
-                value={warehouse}
-                onChange={(event) => setWarehouse(event.target.value as WarehouseFilter)}
-                style={inputStyle}
-              >
-                <option value="all">全部</option>
-                <option value="main">總倉</option>
-                <option value="withdraw">撤台</option>
-                <option value="swap">夾換品</option>
-                <option value="onsite">現場</option>
-              </select>
-            </div>
-
-            <div style={fieldStyle}>
-              <label style={labelStyle}>類型</label>
-              <select
-                value={typeFilter}
-                onChange={(event) => setTypeFilter(event.target.value as TypeFilter)}
-                style={inputStyle}
-              >
-                <option value="all">全部</option>
-                <option value="inbound">入庫</option>
-                <option value="outbound">出庫</option>
-                <option value="voided">已作廢</option>
-              </select>
-            </div>
-          </div>
-
-          <button disabled={loading} onClick={() => void loadRecords()} style={queryButtonStyle}>
-            {loading ? "查詢中..." : "查詢"}
+          <button
+            onClick={() => void loadRecords(businessDate)}
+            style={searchButtonStyle}
+            aria-label="查詢"
+            disabled={loading}
+          >
+            🔍
           </button>
+
+          {loading && <div style={loadingHintStyle}>查詢中...</div>}
         </section>
 
         <div style={summaryRowStyle}>
@@ -349,7 +309,21 @@ export default function LineBotPage({ onBack }: Props) {
         )}
 
         {!loading && filteredRows.length > 0 && (
-          <section style={recordListStyle}>
+          <section style={{ ...recordListStyle, ...(isDesktop ? desktopRecordListStyle : {}) }}>
+            {isDesktop && (
+              <div style={desktopListHeaderStyle}>
+                <span>類型</span>
+                <span>時間</span>
+                <span>倉庫</span>
+                <span>SKU</span>
+                <span>品名</span>
+                <span>箱</span>
+                <span>散</span>
+                <span>金額</span>
+                <span>操作</span>
+              </div>
+            )}
+
             {filteredRows.map((row) => {
               const product = products[row.product_sku]
               const direction = getDirection(row)
@@ -359,52 +333,97 @@ export default function LineBotPage({ onBack }: Props) {
               const voidState = getVoidState(row)
 
               return (
-                <article key={row.id} style={recordCardStyle}>
-                  <div style={cardTopStyle}>
-                    <span
-                      style={direction === "in" ? inboundMarkStyle : outboundMarkStyle}
-                    >
-                      {direction === "in" ? "入" : "出"}
-                    </span>
-
-                    <span style={topMetaStyle}>{formatTaipeiShort(row.created_at)}</span>
-                    <span style={topMetaStyle}>{formatWarehouse(row.warehouse_code)}</span>
-                    <span style={amountStyle}>$ {formatMoney(amount)}</span>
-
-                    {voidState.canVoid ? (
-                      <button
-                        disabled={voidingId === row.id}
-                        onClick={() => void voidTransaction(row)}
-                        style={voidButtonStyle}
+                <article
+                  key={row.id}
+                  style={{ ...recordCardStyle, ...(isDesktop ? desktopRecordCardStyle : {}) }}
+                >
+                  {isDesktop ? (
+                    <>
+                      <span
+                        style={direction === "in" ? inboundMarkStyle : outboundMarkStyle}
                       >
-                        {voidingId === row.id ? "處理中" : "作廢"}
-                      </button>
-                    ) : (
-                      <span style={disabledVoidStyle}>{voidState.label}</span>
-                    )}
-                  </div>
+                        {direction === "in" ? "入" : "出"}
+                      </span>
+                      <span style={topMetaStyle}>
+                        {formatTaipeiShort(row.created_at)}
+                      </span>
+                      <span style={topMetaStyle}>
+                        {formatWarehouse(row.warehouse_code)}
+                      </span>
+                      <span style={desktopSkuStyle}>{row.product_sku}</span>
+                      <span style={desktopNameStyle}>
+                        {product?.product_name || "未命名商品"}
+                      </span>
+                      <span style={desktopQtyValueStyle}>{formatQty(qtyBox)}</span>
+                      <span style={desktopQtyValueStyle}>{formatQty(qtyPiece)}</span>
+                      <span style={amountStyle}>$ {formatMoney(amount)}</span>
+                      {voidState.canVoid ? (
+                        <button
+                          disabled={voidingId === row.id}
+                          onClick={() => void voidTransaction(row)}
+                          style={voidButtonStyle}
+                        >
+                          {voidingId === row.id ? "處理中" : "作廢"}
+                        </button>
+                      ) : (
+                        <span style={disabledVoidStyle}>{voidState.label}</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div style={cardTopStyle}>
+                        <span
+                          style={direction === "in" ? inboundMarkStyle : outboundMarkStyle}
+                        >
+                          {direction === "in" ? "入" : "出"}
+                        </span>
 
-                  <div style={skuStyle}>{row.product_sku}</div>
-                  <div style={nameStyle}>{product?.product_name || "未命名商品"}</div>
+                        <span style={topMetaStyle}>
+                          {formatTaipeiShort(row.created_at)}
+                        </span>
+                        <span style={topMetaStyle}>
+                          {formatWarehouse(row.warehouse_code)}
+                        </span>
+                        <span style={amountStyle}>$ {formatMoney(amount)}</span>
 
-                  <div style={cardBottomStyle}>
-                    <div style={qtyBoxStyle}>
-                      <span style={qtyLabelStyle}>箱</span>
-                      <strong style={qtyValueStyle}>{formatQty(qtyBox)}</strong>
-                    </div>
-                    <div style={qtyBoxStyle}>
-                      <span style={qtyLabelStyle}>散</span>
-                      <strong style={qtyValueStyle}>{formatQty(qtyPiece)}</strong>
-                    </div>
-                    <div style={idStyle}>#{row.id}</div>
-                  </div>
+                        {voidState.canVoid ? (
+                          <button
+                            disabled={voidingId === row.id}
+                            onClick={() => void voidTransaction(row)}
+                            style={voidButtonStyle}
+                          >
+                            {voidingId === row.id ? "處理中" : "作廢"}
+                          </button>
+                        ) : (
+                          <span style={disabledVoidStyle}>{voidState.label}</span>
+                        )}
+                      </div>
 
-                  {row.voided_by_id && (
-                    <div style={voidInfoStyle}>作廢回沖紀錄：#{row.voided_by_id}</div>
-                  )}
+                      <div style={skuStyle}>{row.product_sku}</div>
+                      <div style={nameStyle}>
+                        {product?.product_name || "未命名商品"}
+                      </div>
 
-                  {!row.voided_by_id && !voidState.canVoid && (
-                    <div style={voidInfoStyle}>{getDisabledReason(voidState.label)}</div>
+                      <div style={cardBottomStyle}>
+                        <div style={qtyBoxStyle}>
+                          <span style={qtyLabelStyle}>箱</span>
+                          <strong style={qtyValueStyle}>{formatQty(qtyBox)}</strong>
+                        </div>
+                        <div style={qtyBoxStyle}>
+                          <span style={qtyLabelStyle}>散</span>
+                          <strong style={qtyValueStyle}>{formatQty(qtyPiece)}</strong>
+                        </div>
+                        <div style={idStyle}>#{row.id}</div>
+                      </div>
+
+                      {row.voided_by_id && (
+                        <div style={voidInfoStyle}>作廢回沖紀錄：#{row.voided_by_id}</div>
+                      )}
+
+                      {!row.voided_by_id && !voidState.canVoid && (
+                        <div style={voidInfoStyle}>{getDisabledReason(voidState.label)}</div>
+                      )}
+                    </>
                   )}
                 </article>
               )
@@ -561,7 +580,7 @@ const pageStyle: CSSProperties = {
   minHeight: "100dvh",
   background: "#0f0f0f",
   color: "#fff",
-  padding: "calc(env(safe-area-inset-top, 0px) + 24px) 16px 24px",
+  padding: "calc(env(safe-area-inset-top, 0px) + 12px) 14px 22px",
   boxSizing: "border-box",
   fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 }
@@ -572,122 +591,158 @@ const contentStyle: CSSProperties = {
   margin: "0 auto",
 }
 
+const desktopContentStyle: CSSProperties = {
+  maxWidth: 1120,
+}
+
 const topBarStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "36px minmax(0, 1fr) 36px",
+  gridTemplateColumns: "52px minmax(0, 1fr) 52px",
   alignItems: "center",
-  gap: 10,
+  gap: 12,
   marginBottom: 14,
 }
 
 const topIconButtonStyle: CSSProperties = {
-  width: 36,
-  height: 36,
+  width: 52,
+  height: 44,
   border: "none",
-  borderRadius: 12,
+  borderRadius: 0,
   background: "transparent",
   color: "#fff",
-  fontSize: 22,
+  fontSize: 40,
   lineHeight: 1,
 }
 
 const pageTitleStyle: CSSProperties = {
   margin: 0,
   color: "#fff",
-  fontSize: 22,
+  fontSize: 26,
   fontWeight: 900,
   textAlign: "center",
 }
 
 const filterPanelStyle: CSSProperties = {
   display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) 48px",
   gap: 10,
-  border: "1px solid #333",
-  borderRadius: 18,
-  background: "#171717",
-  padding: 14,
-  marginBottom: 12,
-}
-
-const fieldStyle: CSSProperties = {
-  display: "grid",
-  gap: 6,
-}
-
-const compactGridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 10,
-}
-
-const labelStyle: CSSProperties = {
-  color: "#bbb",
-  fontSize: 13,
-  fontWeight: 800,
+  padding: "0 0 8px",
+  marginBottom: 8,
 }
 
 const inputStyle: CSSProperties = {
   width: "100%",
-  height: 42,
+  height: 44,
   borderRadius: 12,
   border: "1px solid #3c3c3c",
   background: "#242424",
   color: "#fff",
-  fontSize: 16,
-  padding: "0 12px",
+  fontSize: 14,
+  padding: "0 10px",
   boxSizing: "border-box",
 }
 
-const queryButtonStyle: CSSProperties = {
-  width: "100%",
-  minHeight: 44,
+const dateInputStyle: CSSProperties = {
+  textAlign: "center",
+  fontWeight: 800,
+}
+
+const searchButtonStyle: CSSProperties = {
+  width: 48,
+  height: 44,
   border: "none",
-  borderRadius: 14,
-  background: "#5aa2ff",
-  color: "#fff",
-  fontSize: 16,
-  fontWeight: 900,
+  borderRadius: 12,
+  background: "#fff",
+  color: "#111",
+  fontSize: 18,
+  display: "grid",
+  placeItems: "center",
+}
+
+const loadingHintStyle: CSSProperties = {
+  gridColumn: "1 / -1",
+  width: "100%",
+  color: "#9dccff",
+  fontSize: 12,
+  fontWeight: 800,
+  textAlign: "center",
 }
 
 const summaryRowStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
-  gap: 8,
+  gap: 7,
   color: "#aaa",
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 800,
-  margin: "0 2px 12px",
+  margin: "0 2px 10px",
 }
 
 const recordListStyle: CSSProperties = {
   display: "grid",
-  gap: 12,
+  gap: 7,
+}
+
+const desktopRecordListStyle: CSSProperties = {
+  gap: 0,
+  border: "1px solid #333",
+  borderRadius: 16,
+  overflow: "hidden",
+  background: "#151515",
+}
+
+const desktopListHeaderStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "54px 112px 82px 142px minmax(0, 1fr) 64px 64px 106px 90px",
+  alignItems: "center",
+  gap: 10,
+  minHeight: 40,
+  padding: "0 14px",
+  borderBottom: "1px solid #303030",
+  background: "#111",
+  color: "#999",
+  fontSize: 12,
+  fontWeight: 900,
 }
 
 const recordCardStyle: CSSProperties = {
   border: "1px solid #333",
-  borderRadius: 18,
+  borderRadius: 12,
   background: "#171717",
-  padding: 14,
+  padding: 8,
+}
+
+const desktopRecordCardStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "54px 112px 82px 142px minmax(0, 1fr) 64px 64px 106px 90px",
+  alignItems: "center",
+  gap: 10,
+  minHeight: 56,
+  border: "none",
+  borderBottom: "1px solid #2b2b2b",
+  borderRadius: 0,
+  background: "#1a1a1a",
+  padding: "8px 14px",
 }
 
 const cardTopStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "44px minmax(68px, auto) minmax(50px, auto) minmax(0, 1fr) auto",
+  gridTemplateColumns: "34px minmax(60px, auto) minmax(42px, auto) minmax(0, 1fr) auto",
   alignItems: "center",
-  gap: 10,
-  marginBottom: 14,
+  gap: 6,
+  marginBottom: 7,
 }
 
 const inboundMarkStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
-  width: 38,
-  height: 38,
+  width: 28,
+  height: 28,
   borderRadius: 999,
   background: "rgba(90,162,255,0.18)",
   color: "#9dccff",
   border: "1px solid rgba(90,162,255,0.34)",
+  fontSize: 13,
   fontWeight: 900,
 }
 
@@ -700,102 +755,119 @@ const outboundMarkStyle: CSSProperties = {
 
 const topMetaStyle: CSSProperties = {
   color: "#d5d5d5",
-  fontSize: 14,
+  fontSize: 12,
   fontWeight: 900,
   whiteSpace: "nowrap",
 }
 
 const amountStyle: CSSProperties = {
   color: "#e5e5e5",
-  fontSize: 18,
+  fontSize: 13,
   fontWeight: 950,
   textAlign: "right",
   whiteSpace: "nowrap",
 }
 
 const voidButtonStyle: CSSProperties = {
-  minWidth: 64,
-  height: 40,
+  minWidth: 48,
+  height: 30,
   border: "none",
-  borderRadius: 14,
+  borderRadius: 10,
   background: "#ef4444",
   color: "#fff",
-  fontSize: 15,
+  fontSize: 13,
   fontWeight: 900,
 }
 
 const disabledVoidStyle: CSSProperties = {
-  minWidth: 64,
-  minHeight: 40,
+  minWidth: 48,
+  minHeight: 30,
   display: "grid",
   placeItems: "center",
-  borderRadius: 14,
+  borderRadius: 10,
   background: "#2a2a2a",
   color: "#8e8e8e",
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 900,
-  padding: "0 8px",
+  padding: "0 7px",
   boxSizing: "border-box",
 }
 
 const skuStyle: CSSProperties = {
   color: "#fff",
-  fontSize: 22,
+  fontSize: 16,
   fontWeight: 950,
   overflowWrap: "anywhere",
 }
 
+const desktopSkuStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 850,
+}
+
 const nameStyle: CSSProperties = {
   color: "#ddd",
-  fontSize: 17,
+  fontSize: 13,
   fontWeight: 850,
-  marginTop: 8,
+  marginTop: 3,
   overflowWrap: "anywhere",
+}
+
+const desktopNameStyle: CSSProperties = {
+  marginTop: 0,
+  color: "#f4f4f5",
+  fontSize: 13,
 }
 
 const cardBottomStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) auto",
-  gap: 10,
+  gap: 6,
   alignItems: "end",
-  marginTop: 14,
+  marginTop: 7,
 }
 
 const qtyBoxStyle: CSSProperties = {
   border: "1px solid #2e2e2e",
-  borderRadius: 14,
+  borderRadius: 10,
   background: "#111",
-  padding: "10px 12px",
+  padding: "6px 8px",
   minWidth: 0,
 }
 
 const qtyLabelStyle: CSSProperties = {
   color: "#bbb",
-  fontSize: 13,
+  fontSize: 11,
   fontWeight: 850,
-  marginRight: 10,
+  marginRight: 8,
 }
 
 const qtyValueStyle: CSSProperties = {
   color: "#fff",
-  fontSize: 22,
+  fontSize: 16,
   fontWeight: 950,
+}
+
+const desktopQtyValueStyle: CSSProperties = {
+  color: "#e5e7eb",
+  fontSize: 13,
+  fontWeight: 850,
 }
 
 const idStyle: CSSProperties = {
   color: "#aaa",
-  fontSize: 17,
+  fontSize: 12,
   fontWeight: 900,
-  paddingBottom: 11,
+  paddingBottom: 7,
 }
 
 const voidInfoStyle: CSSProperties = {
-  borderRadius: 12,
+  borderRadius: 10,
   background: "rgba(148,163,184,0.1)",
   color: "#aaa",
-  padding: 10,
-  fontSize: 13,
-  marginTop: 12,
+  padding: 8,
+  fontSize: 12,
+  marginTop: 8,
 }
 
 const emptyStyle: CSSProperties = {
