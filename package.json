@@ -2,7 +2,7 @@
   "name": "catchme-machine",
   "private": true,
   "version": "0.0.0",
-  "homepage": "https://anna9-work.github.io/CatchMe-Machine/",
+  "homepage": "https://anna9-work.github.io/Penghu-Machine/",
   "type": "module",
   "scripts": {
     "dev": "vite",
