@@ -40,6 +40,7 @@ type SummaryTotals = Pick<
 >
 
 export default function Home({
+  onInventoryAuditClick,
   onProductClick,
   onInboundClick,
   onAdjustmentClick,
@@ -47,6 +48,7 @@ export default function Home({
 }: Props) {
   const todayText = getTaipeiDisplayDate()
   const businessDate = getBusinessDateValue()
+  const isDesktop = useIsDesktop()
   const [summary, setSummary] = useState<DashboardSummary>({
     inventoryAmount: 0,
     inboundAmount: 0,
@@ -129,10 +131,17 @@ export default function Home({
       accent: "#b9a7ff",
       onClick: onLineBotClick,
     },
+    {
+      code: "AUD",
+      title: "庫存盤點",
+      subtitle: "建立 / 盤點 / 審核",
+      accent: "#34d399",
+      onClick: onInventoryAuditClick,
+    },
   ]
 
   return (
-    <main style={pageStyle}>
+    <main style={getPageStyle(isDesktop)}>
       <section style={heroStyle}>
         <div style={brandBlockStyle}>
           <h1 style={storeTitleStyle}>澎湖店</h1>
@@ -177,37 +186,63 @@ export default function Home({
         <h2 style={sectionTitleStyle}>快捷功能</h2>
       </section>
 
-      <section style={actionListStyle}>
+      <section style={getActionListStyle(isDesktop)}>
         {actionCards.map((card) => (
-          <button key={card.code} style={actionCardStyle} onClick={card.onClick}>
+          <button
+            key={card.code}
+            style={getActionCardStyle(isDesktop)}
+            onClick={card.onClick}
+          >
             <span
               style={{
-                ...iconBoxStyle,
+                ...getIconBoxStyle(isDesktop),
                 borderColor: `${card.accent}55`,
-                boxShadow: `0 0 28px ${card.accent}1f`,
+                boxShadow: isDesktop ? "none" : `0 0 28px ${card.accent}1f`,
               }}
             >
-              <span style={{ ...iconCodeStyle, color: card.accent }}>
+              <span style={{ ...getIconCodeStyle(isDesktop), color: card.accent }}>
                 {card.code}
               </span>
             </span>
 
             <span style={actionTextStyle}>
-              <span style={actionTitleStyle}>{card.title}</span>
-              <span style={actionSubtitleStyle}>{card.subtitle}</span>
+              <span style={getActionTitleStyle(isDesktop)}>{card.title}</span>
+              <span style={getActionSubtitleStyle(isDesktop)}>
+                {card.subtitle}
+              </span>
             </span>
 
-            <span style={{ ...arrowStyle, color: card.accent }}>→</span>
+            <span style={{ ...getArrowStyle(isDesktop), color: card.accent }}>
+              →
+            </span>
           </button>
         ))}
       </section>
 
-      <button style={primaryCtaStyle} onClick={onInboundClick}>
-        <span style={ctaIconStyle}>IN</span>
+      <button style={getPrimaryCtaStyle(isDesktop)} onClick={onInboundClick}>
+        <span style={getCtaIconStyle(isDesktop)}>IN</span>
         <span>入庫</span>
       </button>
     </main>
   )
+}
+
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === "undefined") return false
+    return window.matchMedia("(min-width: 900px)").matches
+  })
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 900px)")
+    const handleChange = () => setIsDesktop(media.matches)
+
+    handleChange()
+    media.addEventListener("change", handleChange)
+    return () => media.removeEventListener("change", handleChange)
+  }, [])
+
+  return isDesktop
 }
 
 function readNumber(row: DailySheetRow, ...keys: string[]) {
@@ -272,6 +307,20 @@ function getBusinessDateValue() {
   const businessDay = String(base.getDate()).padStart(2, "0")
 
   return `${businessYear}-${businessMonth}-${businessDay}`
+}
+
+function getPageStyle(isDesktop: boolean): CSSProperties {
+  return {
+    ...pageStyle,
+    ...(isDesktop
+      ? {
+          maxWidth: 980,
+          margin: "0 auto",
+          padding:
+            "calc(env(safe-area-inset-top, 0px) + 28px) 28px calc(env(safe-area-inset-bottom, 0px) + 122px)",
+        }
+      : null),
+  }
 }
 
 const pageStyle: CSSProperties = {
@@ -444,9 +493,44 @@ const sectionTitleStyle: CSSProperties = {
   letterSpacing: 0,
 }
 
+function getActionListStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return actionListStyle
+
+  return {
+    display: "grid",
+    gap: 8,
+    border: "1px solid rgba(148,163,184,0.18)",
+    borderRadius: 16,
+    overflow: "hidden",
+    background: "rgba(255,255,255,0.035)",
+  }
+}
+
 const actionListStyle: CSSProperties = {
   display: "grid",
   gap: 13,
+}
+
+function getActionCardStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return actionCardStyle
+
+  return {
+    width: "100%",
+    minHeight: 62,
+    display: "grid",
+    gridTemplateColumns: "48px minmax(0, 1fr) 32px",
+    alignItems: "center",
+    gap: 12,
+    border: "none",
+    borderBottom: "1px solid rgba(148,163,184,0.14)",
+    borderRadius: 0,
+    background: "rgba(255,255,255,0.02)",
+    color: "#f8fafc",
+    padding: "10px 14px",
+    textAlign: "left",
+    boxShadow: "none",
+    cursor: "pointer",
+  }
 }
 
 const actionCardStyle: CSSProperties = {
@@ -466,6 +550,20 @@ const actionCardStyle: CSSProperties = {
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.1)",
 }
 
+function getIconBoxStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return iconBoxStyle
+
+  return {
+    width: 40,
+    height: 40,
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 10,
+    display: "grid",
+    placeItems: "center",
+    background: "rgba(255,255,255,0.055)",
+  }
+}
+
 const iconBoxStyle: CSSProperties = {
   width: 58,
   height: 58,
@@ -474,6 +572,17 @@ const iconBoxStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
   background: "rgba(255,255,255,0.08)",
+}
+
+function getIconCodeStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return iconCodeStyle
+
+  return {
+    fontSize: 11,
+    lineHeight: 1,
+    fontWeight: 950,
+    letterSpacing: 0,
+  }
 }
 
 const iconCodeStyle: CSSProperties = {
@@ -489,11 +598,33 @@ const actionTextStyle: CSSProperties = {
   gap: 6,
 }
 
+function getActionTitleStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return actionTitleStyle
+
+  return {
+    color: "#f8fafc",
+    fontSize: 17,
+    lineHeight: 1.15,
+    fontWeight: 950,
+  }
+}
+
 const actionTitleStyle: CSSProperties = {
   color: "#f8fafc",
   fontSize: 22,
   lineHeight: 1.1,
   fontWeight: 950,
+}
+
+function getActionSubtitleStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return actionSubtitleStyle
+
+  return {
+    color: "#94a3b8",
+    fontSize: 12,
+    lineHeight: 1.25,
+    fontWeight: 850,
+  }
 }
 
 const actionSubtitleStyle: CSSProperties = {
@@ -503,11 +634,34 @@ const actionSubtitleStyle: CSSProperties = {
   fontWeight: 850,
 }
 
+function getArrowStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return arrowStyle
+
+  return {
+    justifySelf: "end",
+    fontSize: 24,
+    lineHeight: 1,
+    fontWeight: 900,
+  }
+}
+
 const arrowStyle: CSSProperties = {
   justifySelf: "end",
   fontSize: 34,
   lineHeight: 1,
   fontWeight: 900,
+}
+
+function getPrimaryCtaStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return primaryCtaStyle
+
+  return {
+    ...primaryCtaStyle,
+    left: "50%",
+    right: "auto",
+    width: "min(924px, calc(100vw - 56px))",
+    transform: "translateX(-50%)",
+  }
 }
 
 const primaryCtaStyle: CSSProperties = {
@@ -528,6 +682,17 @@ const primaryCtaStyle: CSSProperties = {
   fontSize: 23,
   fontWeight: 950,
   boxShadow: "0 18px 48px rgba(59,130,246,0.42)",
+}
+
+function getCtaIconStyle(isDesktop: boolean): CSSProperties {
+  if (!isDesktop) return ctaIconStyle
+
+  return {
+    ...ctaIconStyle,
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+  }
 }
 
 const ctaIconStyle: CSSProperties = {
