@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react"
 import { supabase } from "../lib/supabase"
+import { loadEnabledWarehouseKinds, type WarehouseKind } from "../lib/warehouses"
 
 type Props = {
   onBack: () => void
@@ -19,19 +20,13 @@ type ProductRow = {
   tags: string[] | null
 }
 
-type Warehouse = {
-  warehouse_code: string
-  warehouse_name: string
-}
-
 const GROUP_CODE = "catchme_penghu"
 const INBOUND_SOURCE = "app_inbound"
-const ALLOWED_WAREHOUSES = ["main", "withdraw", "swap"]
 
 export default function InboundPage({ onBack }: Props) {
   const [bizDate] = useState(() => getTodayText())
   const [warehouse, setWarehouse] = useState("main")
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [warehouses, setWarehouses] = useState<WarehouseKind[]>([])
   const [product, setProduct] = useState<Product | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState("")
@@ -75,28 +70,7 @@ export default function InboundPage({ onBack }: Props) {
   }, [product])
 
   async function loadWarehouses() {
-    const { data, error: warehouseError } = await supabase
-      .from("warehouse_kinds")
-      .select("warehouse_code,warehouse_name")
-      .in("warehouse_code", ALLOWED_WAREHOUSES)
-      .order("warehouse_code", { ascending: true })
-
-    if (warehouseError) {
-      console.error(warehouseError)
-      setWarehouses([
-        { warehouse_code: "main", warehouse_name: "總倉" },
-        { warehouse_code: "withdraw", warehouse_name: "撤台" },
-        { warehouse_code: "swap", warehouse_name: "夾換品" },
-      ])
-      return
-    }
-
-    const rows = ((data ?? []) as Warehouse[]).sort((a, b) => {
-      return (
-        ALLOWED_WAREHOUSES.indexOf(a.warehouse_code) -
-        ALLOWED_WAREHOUSES.indexOf(b.warehouse_code)
-      )
-    })
+    const rows = await loadEnabledWarehouseKinds(supabase)
     setWarehouses(rows)
     if (rows.length > 0 && !rows.some((row) => row.warehouse_code === warehouse)) {
       setWarehouse(rows[0].warehouse_code)
