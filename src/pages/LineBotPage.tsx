@@ -150,6 +150,7 @@ export default function LineBotPage({ onBack }: Props) {
 
   function handleBusinessDateChange(value: string) {
     setBusinessDate(value)
+    void loadRecords(value)
   }
 
   async function loadProducts(nextRows: LedgerRow[]) {
@@ -294,15 +295,6 @@ export default function LineBotPage({ onBack }: Props) {
             type="date"
             style={{ ...inputStyle, ...dateInputStyle }}
           />
-
-          <button
-            onClick={() => void loadRecords(businessDate)}
-            style={searchButtonStyle}
-            aria-label="查詢"
-            disabled={loading}
-          >
-            🔍
-          </button>
 
           {loading && <div style={loadingHintStyle}>查詢中...</div>}
         </section>
@@ -647,18 +639,6 @@ const inputStyle: CSSProperties = {
 const dateInputStyle: CSSProperties = {
   textAlign: "center",
   fontWeight: 800,
-}
-
-const searchButtonStyle: CSSProperties = {
-  width: 48,
-  height: 44,
-  border: "none",
-  borderRadius: 12,
-  background: "#fff",
-  color: "#111",
-  fontSize: 18,
-  display: "grid",
-  placeItems: "center",
 }
 
 const loadingHintStyle: CSSProperties = {
