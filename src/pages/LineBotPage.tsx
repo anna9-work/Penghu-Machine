@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react"
 import { supabase } from "../lib/supabase"
+import {
+  getWarehouseName,
+  loadAllWarehouseKinds,
+  type WarehouseKind,
+} from "../lib/warehouses"
 
 type Props = {
   onBack: () => void
@@ -68,6 +73,7 @@ export default function LineBotPage({ onBack }: Props) {
   const [businessDate, setBusinessDate] = useState(() => getBusinessDateText())
   const [rows, setRows] = useState<LedgerRow[]>([])
   const [products, setProducts] = useState<ProductMap>({})
+  const [warehouseKinds, setWarehouseKinds] = useState<WarehouseKind[]>([])
   const [followingMap, setFollowingMap] = useState<FollowingMap>({})
   const [loading, setLoading] = useState(false)
   const [voidingId, setVoidingId] = useState<number | null>(null)
@@ -75,6 +81,7 @@ export default function LineBotPage({ onBack }: Props) {
   const [error, setError] = useState("")
 
   useEffect(() => {
+    void loadWarehouseKinds()
     void loadRecords()
   }, [])
 
@@ -134,6 +141,11 @@ export default function LineBotPage({ onBack }: Props) {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function loadWarehouseKinds() {
+    const rows = await loadAllWarehouseKinds(supabase)
+    setWarehouseKinds(rows)
   }
 
   function handleBusinessDateChange(value: string) {
@@ -348,7 +360,7 @@ export default function LineBotPage({ onBack }: Props) {
                         {formatTaipeiShort(row.created_at)}
                       </span>
                       <span style={topMetaStyle}>
-                        {formatWarehouse(row.warehouse_code)}
+                        {getWarehouseName(row.warehouse_code, warehouseKinds)}
                       </span>
                       <span style={desktopSkuStyle}>{row.product_sku}</span>
                       <span style={desktopNameStyle}>
@@ -382,7 +394,7 @@ export default function LineBotPage({ onBack }: Props) {
                           {formatTaipeiShort(row.created_at)}
                         </span>
                         <span style={topMetaStyle}>
-                          {formatWarehouse(row.warehouse_code)}
+                          {getWarehouseName(row.warehouse_code, warehouseKinds)}
                         </span>
                         <span style={amountStyle}>$ {formatMoney(amount)}</span>
 
@@ -548,16 +560,6 @@ function formatMoney(value: number | null | undefined) {
   })
 }
 
-function formatWarehouse(code: string) {
-  const names: Record<string, string> = {
-    main: "總倉",
-    onsite: "現場",
-    swap: "夾換品",
-    withdraw: "撤台",
-  }
-
-  return names[code] ?? code
-}
 
 function formatVoidError(err: unknown) {
   const message = err instanceof Error ? err.message : "作廢失敗"
