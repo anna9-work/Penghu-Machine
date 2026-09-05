@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { supabase } from "../lib/supabase"
-import { loadEnabledWarehouseKinds, type WarehouseKind } from "../lib/warehouses"
 
 type Props = {
   onBack: () => void
@@ -36,14 +35,20 @@ type StockRow = {
   amount: number | null
 }
 
+type Warehouse = {
+  warehouse_code: string
+  warehouse_name: string
+}
+
 const GROUP_CODE = "catchme_penghu"
+const DEFAULT_WAREHOUSE_ORDER = ["main", "withdraw", "swap", "onsite"]
 
 export default function AdjustmentPage({ onBack }: Props) {
   const submittingRef = useRef(false)
   const [mode, setMode] = useState<Mode>("backfill_inbound")
   const [adjustDate, setAdjustDate] = useState(() => getTodayText())
   const [warehouse, setWarehouse] = useState("main")
-  const [warehouses, setWarehouses] = useState<WarehouseKind[]>([])
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [product, setProduct] = useState<Product | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState("")
@@ -99,11 +104,37 @@ export default function AdjustmentPage({ onBack }: Props) {
     return qtyBox * Number(product.units_per_box || 0)
   }, [boxQty, isBox2Piece, product])
 
+  const box2PieceQty = Number(boxQty || "0")
+  const box2PieceStockBox = Number(product?.stock_box ?? 0)
+  const box2PieceWarning =
+    isBox2Piece && product && box2PieceQty > box2PieceStockBox
+      ? "轉換箱數不可大於目前庫存箱數"
+      : ""
+  const canSubmit =
+    !saving &&
+    Boolean(product) &&
+    (!isBox2Piece ||
+      (Number.isInteger(box2PieceQty) &&
+        box2PieceQty > 0 &&
+        box2PieceQty <= box2PieceStockBox))
+
   const modeLabel = isInbound ? "補入庫" : isOutbound ? "補出庫" : "箱轉散"
   const fixedTime = isInbound ? "13:00" : isOutbound ? "14:00" : "送出當下"
 
   async function loadWarehouses() {
-    const rows = await loadEnabledWarehouseKinds(supabase)
+    const { data, error: warehouseError } = await supabase
+      .from("warehouse_kinds")
+      .select("warehouse_code,warehouse_name")
+      .eq("enabled", true)
+      .order("warehouse_code", { ascending: true })
+
+    if (warehouseError) {
+      console.error(warehouseError)
+      setWarehouses([{ warehouse_code: "main", warehouse_name: "總倉" }])
+      return
+    }
+
+    const rows = ((data ?? []) as Warehouse[]).sort(sortWarehouses)
 
     setWarehouses(rows)
     if (rows.length > 0 && !rows.some((row) => row.warehouse_code === warehouse)) {
@@ -176,27 +207,22 @@ export default function AdjustmentPage({ onBack }: Props) {
       setMessage("")
       setSearchResults([])
 
+      const barcodeSku = await loadSkuByBarcode(value)
       const stockRows = await loadStockRows()
       const lowerValue = value.toLowerCase()
-
-      console.log("box2piece stockRows", stockRows)
-      console.log("box2piece warehouse", warehouse)
-      console.log("box2piece keyword", lowerValue)
 
       const results = stockRows
         .filter((row) => {
           if (row.warehouse_code !== warehouse) return false
           if (Number(row.box ?? 0) <= 0) return false
+          if (barcodeSku && row.product_sku === barcodeSku) return true
 
           const sku = row.product_sku.toLowerCase()
           const name = (row.product_name ?? "").toLowerCase()
-
           return sku.includes(lowerValue) || name.includes(lowerValue)
         })
         .slice(0, 10)
         .map(stockRowToProduct)
-
-      console.log("box2piece results", results)
 
       setSearchResults(results)
 
@@ -275,11 +301,7 @@ export default function AdjustmentPage({ onBack }: Props) {
       .eq("enabled", true)
       .maybeSingle()
 
-    if (barcodeError) {
-      console.warn("product_barcodes lookup failed", barcodeError)
-      return ""
-    }
-
+    if (barcodeError) throw barcodeError
     return data?.product_sku ?? ""
   }
 
@@ -648,9 +670,11 @@ export default function AdjustmentPage({ onBack }: Props) {
               <input
                 value={boxQty}
                 onChange={(event) => setBoxQty(event.target.value)}
-                inputMode="decimal"
+                inputMode="numeric"
                 type="number"
                 min={0}
+                step={1}
+                max={Math.max(0, Number(product?.stock_box ?? 0))}
                 style={inputStyle}
               />
 
@@ -662,6 +686,9 @@ export default function AdjustmentPage({ onBack }: Props) {
               />
 
               <div style={hintBoxStyle}>箱轉散只允許箱轉散，不提供散轉箱。</div>
+              {box2PieceWarning && (
+                <div style={warningBoxStyle}>{box2PieceWarning}</div>
+              )}
             </>
           )}
 
@@ -724,7 +751,14 @@ export default function AdjustmentPage({ onBack }: Props) {
           )}
         </section>
 
-        <button disabled={saving} onClick={submitAdjustment} style={primaryButtonStyle}>
+        <button
+          disabled={!canSubmit}
+          onClick={submitAdjustment}
+          style={{
+            ...primaryButtonStyle,
+            opacity: canSubmit ? 1 : 0.45,
+          }}
+        >
           {saving ? "送出中..." : `送出${modeLabel}`}
         </button>
       </div>
@@ -866,6 +900,16 @@ function getBusinessDateText() {
   return `${businessYear}-${businessMonth}-${businessDay}`
 }
 
+function sortWarehouses(a: Warehouse, b: Warehouse) {
+  const aIndex = DEFAULT_WAREHOUSE_ORDER.indexOf(a.warehouse_code)
+  const bIndex = DEFAULT_WAREHOUSE_ORDER.indexOf(b.warehouse_code)
+
+  if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex
+  if (aIndex >= 0) return -1
+  if (bIndex >= 0) return 1
+  return a.warehouse_code.localeCompare(b.warehouse_code)
+}
+
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : String(value)
 }
@@ -880,12 +924,14 @@ function formatErrorMessage(err: unknown) {
   if (message.includes("ERR_EXPIRY_REQUIRED")) return "此食品補入庫需要填寫效期"
   if (message.includes("box2piece_min: empty sku")) return "請先選擇商品"
   if (message.includes("box2piece_min: p_box must be > 0")) return "請輸入要轉換的箱數"
-  if (message.includes("箱轉散箱數必須是整數")) return "箱轉散箱數必須是整數"
   if (message.includes("box2piece_min: p_box must be an integer")) {
     return "箱轉散箱數必須是整數"
   }
   if (message.includes("box2piece_min: insufficient box stock")) {
     return "庫存箱數不足，請重新查詢目前庫存"
+  }
+  if (message.includes("box2piece_min: current stock is negative")) {
+    return "目前庫存已有負數異常，請先校正庫存後再轉換"
   }
   if (message.includes("box2piece_min: invalid units_per_box")) {
     return "此商品箱入數異常，無法箱轉散"
@@ -1007,6 +1053,16 @@ const hintBoxStyle: CSSProperties = {
   color: "#aaa",
   fontSize: 13,
   padding: 12,
+}
+
+const warningBoxStyle: CSSProperties = {
+  border: "1px solid rgba(248,113,113,0.36)",
+  borderRadius: 12,
+  background: "rgba(248,113,113,0.12)",
+  color: "#ffb4b4",
+  fontSize: 13,
+  padding: 12,
+  marginTop: 10,
 }
 
 const addProductButtonStyle: CSSProperties = {
