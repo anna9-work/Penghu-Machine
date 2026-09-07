@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react"
 import { supabase } from "../lib/supabase"
-import {
-  getWarehouseName as resolveWarehouseName,
-  isWarehouseEnabled,
-  loadAllWarehouseKinds,
-  type WarehouseKind,
-} from "../lib/warehouses"
 
 const GROUP_CODE = "catchme_penghu"
+const DEFAULT_WAREHOUSE_ORDER = ["main", "withdraw", "swap", "onsite"]
 const AUDIT_REVIEW_LIMIT_DAYS = 30
 
 type Props = {
@@ -17,7 +12,11 @@ type Props = {
 type Screen = "menu" | "list" | "pending" | "entry" | "review"
 type AuditStatus = "draft" | "submitted" | "approved"
 
-type Warehouse = WarehouseKind
+type Warehouse = {
+  warehouse_code: string
+  warehouse_name: string
+  enabled?: boolean
+}
 
 type AuditRecord = {
   id: number
@@ -88,6 +87,7 @@ type ReviewRow = AuditItem & {
 export default function InventoryAuditPage({ onBack }: Props) {
   const [screen, setScreen] = useState<Screen>("menu")
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [allWarehouses, setAllWarehouses] = useState<Warehouse[]>([])
   const [bizDate, setBizDate] = useState(getBusinessDateValue())
   const [warehouse, setWarehouse] = useState("main")
   const [audits, setAudits] = useState<AuditRow[]>([])
@@ -113,10 +113,6 @@ export default function InventoryAuditPage({ onBack }: Props) {
   const warehouseName = useMemo(
     () => getWarehouseName(warehouse, warehouses),
     [warehouse, warehouses]
-  )
-  const enabledWarehouses = useMemo(
-    () => warehouses.filter(isWarehouseEnabled),
-    [warehouses]
   )
 
   const editable = audit?.status === "draft"
@@ -184,6 +180,7 @@ export default function InventoryAuditPage({ onBack }: Props) {
 
   useEffect(() => {
     void loadWarehouses()
+    void loadWarehouseManageRows()
     void loadAudits("all")
   }, [])
 
@@ -207,37 +204,66 @@ export default function InventoryAuditPage({ onBack }: Props) {
   }, [searchKeyword, searchOpen])
 
   async function loadWarehouses() {
-    const rows = await loadAllWarehouseKinds(supabase)
-    const enabledRows = rows.filter(isWarehouseEnabled)
+    const { data, error: warehouseError } = await supabase
+      .from("warehouse_kinds")
+      .select("warehouse_code,warehouse_name,enabled")
+      .eq("enabled", true)
+      .order("warehouse_code", { ascending: true })
 
+    if (warehouseError) {
+      console.error(warehouseError)
+      setWarehouses([{ warehouse_code: "main", warehouse_name: "總倉", enabled: true }])
+      return
+    }
+
+    const rows = ((data ?? []) as Warehouse[]).sort(sortWarehouses)
     setWarehouses(rows)
 
-    if (
-      enabledRows.length > 0 &&
-      !enabledRows.some((row) => row.warehouse_code === warehouse)
-    ) {
-      setWarehouse(enabledRows[0].warehouse_code)
+    if (rows.length > 0 && !rows.some((row) => row.warehouse_code === warehouse)) {
+      setWarehouse(rows[0].warehouse_code)
     }
   }
 
-  async function toggleWarehouseEnabled(row: Warehouse, enabled: boolean) {
+  async function loadWarehouseManageRows() {
+    try {
+      setError("")
+
+      const { data, error: listError } = await supabase.rpc(
+        "rpc_warehouse_kinds_list"
+      )
+
+      if (listError) throw listError
+
+      setAllWarehouses(((data ?? []) as Warehouse[]).sort(sortWarehouses))
+    } catch (err) {
+      console.error(err)
+      setError(getErrorMessage(err, "讀取倉庫別失敗"))
+    }
+  }
+
+  async function toggleWarehouse(row: Warehouse) {
     try {
       setSaving(true)
       setError("")
       setMessage("")
 
-      const { error: updateError } = await supabase
-        .from("warehouse_kinds")
-        .update({ enabled })
-        .eq("warehouse_code", row.warehouse_code)
+      const nextEnabled = !row.enabled
+      const { error: updateError } = await supabase.rpc(
+        "rpc_warehouse_kind_set_enabled",
+        {
+          p_warehouse_code: row.warehouse_code,
+          p_enabled: nextEnabled,
+        }
+      )
 
       if (updateError) throw updateError
 
-      setMessage(`${row.warehouse_name} 已${enabled ? "啟用" : "停用"}`)
+      setMessage(`${row.warehouse_name} 已${nextEnabled ? "啟用" : "停用"}`)
+      await loadWarehouseManageRows()
       await loadWarehouses()
     } catch (err) {
       console.error(err)
-      setError(getErrorMessage(err, "更新倉庫狀態失敗"))
+      setError(getErrorMessage(err, "更新倉庫別失敗"))
     } finally {
       setSaving(false)
     }
@@ -864,10 +890,13 @@ export default function InventoryAuditPage({ onBack }: Props) {
         </div>
         {screen === "menu" ? (
           <button
-            onClick={() => setCategoryOpen(true)}
+            onClick={() => {
+              setCategoryOpen(true)
+              void loadWarehouseManageRows()
+            }}
             style={ghostButtonStyle}
           >
-            ⚑ 類別
+            ⚑ 管理
           </button>
         ) : screen === "list" ? (
           <button
@@ -1174,22 +1203,19 @@ export default function InventoryAuditPage({ onBack }: Props) {
               onChange={(event) => setWarehouse(event.target.value)}
               style={selectStyle}
             >
-              {enabledWarehouses.map((row) => (
+              {warehouses.map((row) => (
                 <option key={row.warehouse_code} value={row.warehouse_code}>
                   {row.warehouse_name}
                 </option>
               ))}
             </select>
-            {enabledWarehouses.length === 0 && (
-              <p style={emptyStyle}>目前沒有已啟用的倉庫別</p>
-            )}
 
             <button
               onClick={() => void createAudit()}
-              disabled={saving || enabledWarehouses.length === 0}
+              disabled={saving}
               style={{
                 ...primaryButtonStyle,
-                opacity: saving || enabledWarehouses.length === 0 ? 0.65 : 1,
+                opacity: saving ? 0.65 : 1,
               }}
             >
               確認建立盤點單
@@ -1199,50 +1225,52 @@ export default function InventoryAuditPage({ onBack }: Props) {
       )}
 
       {categoryOpen && (
-        <div style={sheetOverlayStyle} onClick={() => setCategoryOpen(false)}>
+        <div
+          style={sheetOverlayStyle}
+          onClick={() => setCategoryOpen(false)}
+        >
           <section
             style={searchSheetStyle}
             onClick={(event) => event.stopPropagation()}
           >
             <div style={sheetHeaderStyle}>
-              <h2 style={sheetTitleStyle}>倉庫別管理</h2>
-              <button onClick={() => setCategoryOpen(false)} style={closeButtonStyle}>
+              <h2 style={sheetTitleStyle}>⚑ 倉庫別管理</h2>
+              <button
+                onClick={() => setCategoryOpen(false)}
+                style={closeButtonStyle}
+              >
                 ×
               </button>
             </div>
+
+            <p style={emptyStyle}>
+              點擊後即可「啟用/停用」，需新增其他類別請洽管理員
+            </p>
 
             {message && <div style={messageStyle}>{message}</div>}
             {error && <div style={errorStyle}>{error}</div>}
 
             <section style={categoryListStyle}>
-              {warehouses.length === 0 && <p style={emptyStyle}>目前沒有倉庫別</p>}
+              {allWarehouses.length === 0 && (
+                <p style={emptyStyle}>目前沒有倉庫別</p>
+              )}
 
-              {warehouses.map((row) => {
-                const enabled = isWarehouseEnabled(row)
-
-                return (
-                  <div key={row.warehouse_code} style={categoryRowStyle}>
-                    <div>
-                      <strong style={categoryNameStyle}>{row.warehouse_name}</strong>
-                      <span style={categoryCodeStyle}>{row.warehouse_code}</span>
-                    </div>
-                    <label style={toggleLabelStyle}>
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        disabled={saving}
-                        onChange={(event) =>
-                          void toggleWarehouseEnabled(row, event.target.checked)
-                        }
-                        style={toggleInputStyle}
-                      />
-                      <span style={enabled ? toggleTextOnStyle : toggleTextOffStyle}>
-                        {enabled ? "啟用" : "停用"}
-                      </span>
-                    </label>
+              {allWarehouses.map((row) => (
+                <button
+                  key={row.warehouse_code}
+                  onClick={() => void toggleWarehouse(row)}
+                  disabled={saving}
+                  style={categoryRowStyle}
+                >
+                  <div>
+                    <strong style={categoryNameStyle}>{row.warehouse_name}</strong>
+                    <span style={categoryCodeStyle}>{row.warehouse_code}</span>
                   </div>
-                )
-              })}
+                  <span style={row.enabled ? enabledPillStyle : disabledPillStyle}>
+                    {row.enabled ? "啟用" : "停用"}
+                  </span>
+                </button>
+              ))}
             </section>
           </section>
         </div>
@@ -1679,7 +1707,23 @@ function formatDateValue(date: Date) {
 }
 
 function getWarehouseName(value: string, warehouses: Warehouse[]) {
-  return resolveWarehouseName(value, warehouses)
+  const found = warehouses.find((row) => row.warehouse_code === value)
+  if (found) return found.warehouse_name
+  if (value === "main") return "總倉"
+  if (value === "withdraw") return "撤台"
+  if (value === "swap") return "夾換品"
+  if (value === "onsite") return "現場"
+  return value
+}
+
+function sortWarehouses(a: Warehouse, b: Warehouse) {
+  const aIndex = DEFAULT_WAREHOUSE_ORDER.indexOf(a.warehouse_code)
+  const bIndex = DEFAULT_WAREHOUSE_ORDER.indexOf(b.warehouse_code)
+
+  if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex
+  if (aIndex >= 0) return -1
+  if (bIndex >= 0) return 1
+  return a.warehouse_code.localeCompare(b.warehouse_code)
 }
 
 function formatStatus(value: string) {
@@ -2186,6 +2230,7 @@ const categoryListStyle: CSSProperties = {
 }
 
 const categoryRowStyle: CSSProperties = {
+  width: "100%",
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) auto",
   alignItems: "center",
@@ -2193,7 +2238,9 @@ const categoryRowStyle: CSSProperties = {
   border: "1px solid rgba(148,163,184,0.16)",
   borderRadius: 16,
   background: "rgba(2,6,23,0.44)",
+  color: "#f8fafc",
   padding: 12,
+  textAlign: "left",
 }
 
 const categoryNameStyle: CSSProperties = {
@@ -2211,27 +2258,20 @@ const categoryCodeStyle: CSSProperties = {
   fontWeight: 850,
 }
 
-const toggleLabelStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  color: "#cbd5e1",
-  fontSize: 13,
+const enabledPillStyle: CSSProperties = {
+  flex: "0 0 auto",
+  borderRadius: 999,
+  background: "rgba(34,197,94,0.16)",
+  color: "#86efac",
+  padding: "7px 10px",
+  fontSize: 12,
   fontWeight: 950,
 }
 
-const toggleInputStyle: CSSProperties = {
-  width: 22,
-  height: 22,
-  accentColor: "#60a5fa",
-}
-
-const toggleTextOnStyle: CSSProperties = {
-  color: "#86efac",
-}
-
-const toggleTextOffStyle: CSSProperties = {
-  color: "#fca5a5",
+const disabledPillStyle: CSSProperties = {
+  ...enabledPillStyle,
+  background: "rgba(148,163,184,0.12)",
+  color: "#94a3b8",
 }
 
 const sheetOverlayStyle: CSSProperties = {
